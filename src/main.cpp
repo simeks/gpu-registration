@@ -6,13 +6,15 @@
 
 #include <random>
 
-stk::VolumeFloat3 run_registration_cpu(
-    const VolumeFloat& fixed, 
-    const VolumeFloat& moving
+void run_registration_cpu(
+    const stk::VolumeFloat& fixed, 
+    const stk::VolumeFloat& moving,
+    stk::VolumeFloat3 df
 );
-stk::VolumeFloat3 run_registration_gpu(
-    const VolumeFloat& fixed, 
-    const VolumeFloat& moving
+void run_registration_gpu(
+    const stk::VolumeFloat& fixed, 
+    const stk::VolumeFloat& moving,
+    stk::VolumeFloat3 df
 );
 
 stk::VolumeFloat make_volume(const dim3& dims)
@@ -22,9 +24,9 @@ stk::VolumeFloat make_volume(const dim3& dims)
     std::mt19937 gen(52434);
     std::uniform_real_distribution<float> dis(0.0f, 1.0f);
 
-    for (int z = 0; z < dims.z; ++z) {
-    for (int y = 0; y < dims.y; ++y) {
-    for (int x = 0; x < dims.x; ++x) {
+    for (int z = 0; z < (int)dims.z; ++z) {
+    for (int y = 0; y < (int)dims.y; ++y) {
+    for (int x = 0; x < (int)dims.x; ++x) {
         vol(x,y,z) = dis(gen);
     }}}
 
@@ -46,12 +48,12 @@ int main(int argc, char* argv[])
     stk::VolumeFloat fixed = make_volume(dims);
     stk::VolumeFloat moving = make_volume(dims);
 
-    stk::VolumeFloat3 df;
+    stk::VolumeFloat3 df(fixed.size(), {0,0,0});
     if (strcmp(argv[1], "cpu") == 0) {
-        df = run_registration_cpu(fixed, moving);
+        run_registration_cpu(fixed, moving, df);
     }
     else if (strcmp(argv[1], "gpu") == 0) {
-        df = run_registration_gpu(fixed, moving);
+        run_registration_gpu(fixed, moving, df);
     }
     else {
         ASSERT(false);
