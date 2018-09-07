@@ -1,26 +1,17 @@
 #include "block_change_flags.h"
 #include "graph_cut.h"
 #include "profiler/profiler.h"
+#include "registration.h"
 
 #include <stk/image/volume.h>
 #include <stk/math/float3.h>
 
 #include <iostream>
 
-namespace {
-    int _max_iteration_count = 1;
-    int3 _neighbors[] = {
-        {1, 0, 0},
-        {-1, 0, 0},
-        {0, 1, 0},
-        {0, -1, 0},
-        {0, 0, 1},
-        {0, 0, -1}
-    };
-}
 
 struct Unary_SSD
 {
+    Unary_SSD() {}
     Unary_SSD(const stk::VolumeFloat& fixed, const stk::VolumeFloat& moving) :
         _fixed(fixed), _moving(moving)
     {
@@ -50,9 +41,10 @@ struct Unary_SSD
 
 struct Binary_Regularizer
 {
+    Binary_Regularizer() {}
     Binary_Regularizer(float3 spacing, float weight) : _spacing(spacing), _weight(weight) {}
 
-    inline double operator()(const int3& p, const float3& d0, const float3& d1, const int3& step)
+    inline double operator()(const int3& /*p*/, const float3& d0, const float3& d1, const int3& step)
     {
         float3 step_in_mm {
             step.x*_spacing.x, 
@@ -72,8 +64,18 @@ struct Binary_Regularizer
     float _weight;
 };
 
+Unary_SSD make_unary_fn(const stk::VolumeFloat& fixed, const stk::VolumeFloat& moving)
+{
+    return Unary_SSD(fixed, moving);
+}
+Binary_Regularizer make_binary_fn()
+{
+    return Binary_Regularizer(float3{1,1,1}, _regularization_weight);
+}
+
+
 template<typename UnaryFn, typename BinaryFn>
-double calculate_energy(UnaryFn& unary_fn, BinaryFn& binary_fn, stk::VolumeFloat3 df)
+double calculate_energy_(UnaryFn& unary_fn, BinaryFn& binary_fn, stk::VolumeFloat3 df)
 {
     dim3 dims = df.size();
 
@@ -106,6 +108,17 @@ double calculate_energy(UnaryFn& unary_fn, BinaryFn& binary_fn, stk::VolumeFloat
         }
     }
     return total_energy;
+}
+double calculate_energy(
+    const stk::VolumeFloat& fixed, 
+    const stk::VolumeFloat& moving, 
+    const stk::VolumeFloat3& df
+)
+{
+    Unary_SSD unary_fn = make_unary_fn(fixed, moving);
+    Binary_Regularizer binary_fn = make_binary_fn();
+
+    return calculate_energy_(unary_fn, binary_fn, df);
 }
 
 template<typename UnaryFn, typename BinaryFn>
@@ -252,7 +265,7 @@ bool do_block(
 
     bool changed_flag = false;
 
-    if (1.0 - current_emin / current_energy > 0.000001f) // Accept solution
+    if (1.0 - current_emin / current_energy > 0.001f) // Accept solution
     {
         PROFILER_SCOPE("apply", 0xFF767323);
         for (int sub_z = 0; sub_z < block_dims.z; sub_z++) {
@@ -291,15 +304,15 @@ void run_registration_cpu(
     stk::VolumeFloat3 df
 )
 {
-    Unary_SSD unary_fn(fixed, moving);
-    Binary_Regularizer binary_fn(fixed.spacing(), 0.1f);
+    Unary_SSD unary_fn = make_unary_fn(fixed, moving);
+    Binary_Regularizer binary_fn = make_binary_fn();
 
     dim3 dims = df.size();
 
     float3 step_size {0.5f, 0.5f, 0.5f};
 
     // Setting the block size to (0, 0, 0) will disable blocking and run the whole volume
-    int3 block_dims = {16,16,16};
+    int3 block_dims = {0,0,0};
     if (block_dims.x == 0)
         block_dims.x = dims.x;
     if (block_dims.y == 0)
@@ -316,7 +329,6 @@ void run_registration_cpu(
     BlockChangeFlags change_flags(block_count); 
 
     int num_iterations = 0;
-    std::cout << "Initial Energy: " << calculate_energy(unary_fn, binary_fn, df) << std::endl;
 
     bool done = false;
     while (!done) {
@@ -416,5 +428,4 @@ void run_registration_cpu(
         
         PROFILER_FLIP();
     }
-    std::cout << "Resulting Energy: " << calculate_energy(unary_fn, binary_fn, df) << std::endl;
 }

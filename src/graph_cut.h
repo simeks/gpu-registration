@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stk/math/types.h>
+
 /// Interface for using the GCO graph cut solver.
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -28,7 +30,7 @@ namespace gco
     // Prevent breaking the build in C++17, where register was removed.
     // The keyword is used within GCO, no idea why, since it is a few
     // decades that it is "exactly as meaningful as whitespace" (cit).
-    #define register
+    //#define register
 
     #include <gco/energy.h>
     #include <gco/graph.cpp>
@@ -41,6 +43,7 @@ namespace gco
 #else
     #pragma warning(pop)
 #endif
+
 
 template<typename T>
 class GraphCut

@@ -2,8 +2,10 @@ set(MAIN_SRCS
     "main.cpp"
     "block_change_flags.cpp"
     "block_change_flags.h"
+    "registration.h"
     "registration_cpu.cpp"
     "registration_gpu.cpp"
+    "registration_gpu.cu"
 )
 
 if (ENABLE_MICROPROFILE)

@@ -1,4 +1,5 @@
 #include "profiler/profiler.h"
+#include "registration.h"
 
 #include <stk/common/assert.h>
 #include <stk/image/gpu_volume.h>
@@ -50,16 +51,23 @@ int main(int argc, char* argv[])
     stk::VolumeFloat fixed = make_volume(dims);
     stk::VolumeFloat moving = make_volume(dims);
 
-    stk::VolumeFloat3 df(fixed.size(), {0,0,0});
+    stk::VolumeFloat3 cpu_df(fixed.size(), {0,0,0});
+    stk::VolumeFloat3 gpu_df(fixed.size(), {0,0,0});
+
+    std::cout << "Initial Energy: " << calculate_energy(fixed, moving, cpu_df) << std::endl;
 
     auto cpu_start = high_resolution_clock::now();
-    run_registration_cpu(fixed, moving, df);
+    run_registration_cpu(fixed, moving, cpu_df);
     auto cpu_stop = high_resolution_clock::now();
     
+    std::cout << "CPU Energy: " << calculate_energy(fixed, moving, cpu_df) << std::endl;
+
     auto gpu_start = high_resolution_clock::now();
-    run_registration_gpu(fixed, moving, df);
+    run_registration_gpu(fixed, moving, gpu_df);
     auto gpu_stop = high_resolution_clock::now();
     
+    std::cout << "GPU Energy: " << calculate_energy(fixed, moving, gpu_df) << std::endl;
+
     auto cpu_elapsed = duration_cast<milliseconds>(cpu_stop - cpu_start);
     auto gpu_elapsed = duration_cast<milliseconds>(gpu_stop - gpu_start);
 
