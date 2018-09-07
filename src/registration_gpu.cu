@@ -1,4 +1,5 @@
 #include <stk/cuda/cuda.h>
+#include <stk/cuda/stream.h>
 #include <stk/cuda/volume.h>
 
 namespace cuda = stk::cuda;
@@ -50,7 +51,8 @@ void gpu_compute_unary_cost(
     const stk::GpuVolume& moving,
     const stk::GpuVolume& df,
     const float3& delta,
-    stk::GpuVolume& unary_cost // float2
+    stk::GpuVolume& unary_cost, // float2
+    cuda::Stream& stream
 )
 {
     dim3 dims = fixed.size();
@@ -67,7 +69,7 @@ void gpu_compute_unary_cost(
         (dims.z + block_size.z - 1) / block_size.z
     };
 
-    ssd_kernel<<<grid_size, block_size>>>(
+    ssd_kernel<<<grid_size, block_size, 0, stream>>>(
         fixed,
         moving,
         df,
@@ -170,7 +172,8 @@ void gpu_compute_binary_cost(
     float weight,
     stk::GpuVolume& cost_x, // float4
     stk::GpuVolume& cost_y, // float4
-    stk::GpuVolume& cost_z  // float4
+    stk::GpuVolume& cost_z, // float4
+    cuda::Stream& stream
 )
 {
     dim3 dims = df.size();
@@ -181,7 +184,7 @@ void gpu_compute_binary_cost(
         (dims.z + block_size.z - 1) / block_size.z
     };
 
-    regularizer_kernel<<<grid_size, block_size>>>(
+    regularizer_kernel<<<grid_size, block_size, 0, stream>>>(
         df,
         dims,
         delta,
@@ -216,7 +219,8 @@ __global__ void apply_displacement_delta(
 void gpu_apply_displacement_delta(
     stk::GpuVolume& df, 
     const stk::GpuVolume& labels, 
-    const float3& delta
+    const float3& delta,
+    cuda::Stream& stream
 )
 {
     dim3 dims = df.size();
@@ -227,7 +231,7 @@ void gpu_apply_displacement_delta(
         (dims.z + block_size.z - 1) / block_size.z
     };
 
-    apply_displacement_delta<<<grid_size, block_size>>>(
+    apply_displacement_delta<<<grid_size, block_size, 0, stream>>>(
         df, 
         labels, 
         dims, 

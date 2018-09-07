@@ -2,6 +2,7 @@
 #include "profiler/profiler.h"
 #include "registration.h"
 
+#include <stk/cuda/stream.h>
 #include <stk/image/gpu_volume.h>
 #include <stk/image/volume.h>
 
@@ -12,7 +13,8 @@ void gpu_compute_unary_cost(
     const stk::GpuVolume& moving,
     const stk::GpuVolume& df,
     const float3& delta,
-    stk::GpuVolume& unary_cost // float2
+    stk::GpuVolume& unary_cost, // float2
+    stk::cuda::Stream& stream
 );
 void gpu_compute_binary_cost(
     const stk::GpuVolume& df,
@@ -20,14 +22,16 @@ void gpu_compute_binary_cost(
     float weight,
     stk::GpuVolume& cost_x, // float4
     stk::GpuVolume& cost_y, // float4
-    stk::GpuVolume& cost_z  // float4
+    stk::GpuVolume& cost_z,  // float4
+    stk::cuda::Stream& stream
 );
 
 // Applies the specified delta to all voxels where label != 0
 void gpu_apply_displacement_delta(
     stk::GpuVolume& df, 
     const stk::GpuVolume& labels, 
-    const float3& delta
+    const float3& delta,
+    stk::cuda::Stream& stream
 );
 
 // Pads vectorfield of type float3 to float4
@@ -129,6 +133,9 @@ void run_registration_gpu(
     stk::VolumeFloat3 initial_df
 )
 {
+    stk::cuda::Stream stream_1;
+    stk::cuda::Stream stream_2;
+
     dim3 dims = initial_df.size();
 
     stk::GpuVolume gpu_fixed(fixed);
@@ -137,19 +144,32 @@ void run_registration_gpu(
     stk::VolumeFloat4 df = df_float3_to_float4(initial_df);
     stk::GpuVolume gpu_df = stk::GpuVolume(df);
 
-    stk::VolumeFloat2 unary_cost(dims, 0);
+    stk::VolumeFloat2 unary_cost(
+        stk::Volume(dims, stk::Type_Float2, nullptr, stk::Usage_Pinned)
+    );
+    unary_cost.fill(float2{0});
+
     stk::GpuVolume gpu_unary_cost(unary_cost);
 
-    stk::VolumeFloat4 binary_cost_x(dims);
-    stk::VolumeFloat4 binary_cost_y(dims);
-    stk::VolumeFloat4 binary_cost_z(dims);
+    stk::VolumeFloat4 binary_cost_x(
+        stk::Volume(dims, stk::Type_Float4, nullptr, stk::Usage_Pinned)
+    );
+    stk::VolumeFloat4 binary_cost_y(
+        stk::Volume(dims, stk::Type_Float4, nullptr, stk::Usage_Pinned)
+    );
+    stk::VolumeFloat4 binary_cost_z(
+        stk::Volume(dims, stk::Type_Float4, nullptr, stk::Usage_Pinned)
+    );
     
     stk::GpuVolume gpu_binary_cost_x(binary_cost_x);
     stk::GpuVolume gpu_binary_cost_y(binary_cost_y);
     stk::GpuVolume gpu_binary_cost_z(binary_cost_z);
     
     // Movement labels, updated per step
-    stk::VolumeUChar labels(dims, (uint8_t)0);
+    stk::VolumeUChar labels(
+        stk::Volume(dims, stk::Type_UChar, nullptr, stk::Usage_Pinned)
+    );
+    labels.fill(0);
     stk::GpuVolume gpu_labels(labels);
 
     float3 step_size {0.5f, 0.5f, 0.5f};
@@ -176,9 +196,10 @@ void run_registration_gpu(
                 gpu_moving,
                 gpu_df,
                 delta,
-                gpu_unary_cost
+                gpu_unary_cost,
+                stream_1
             );
-            gpu_unary_cost.download(unary_cost);
+            gpu_unary_cost.download(unary_cost, stream_1);
 
             gpu_compute_binary_cost(
                 gpu_df,
@@ -186,12 +207,15 @@ void run_registration_gpu(
                 _regularization_weight,
                 gpu_binary_cost_x,
                 gpu_binary_cost_y,
-                gpu_binary_cost_z
+                gpu_binary_cost_z,
+                stream_2
             );
-            gpu_binary_cost_x.download(binary_cost_x);
-            gpu_binary_cost_y.download(binary_cost_y);
-            gpu_binary_cost_z.download(binary_cost_z);
+            gpu_binary_cost_x.download(binary_cost_x, stream_2);
+            gpu_binary_cost_y.download(binary_cost_y, stream_2);
+            gpu_binary_cost_z.download(binary_cost_z, stream_2);
 
+            stream_1.synchronize();
+            stream_2.synchronize();
 
             GraphCut<double> graph({(int)dims.x, (int)dims.y, (int)dims.z});
             double current_energy = build_graph(
@@ -220,7 +244,7 @@ void run_registration_gpu(
             }
             gpu_labels.upload(labels);
 
-            gpu_apply_displacement_delta(gpu_df, gpu_labels, delta);
+            gpu_apply_displacement_delta(gpu_df, gpu_labels, delta, stk::cuda::Stream::null());
         }
 
         done = num_blocks_changed == 0;
