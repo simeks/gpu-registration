@@ -4,6 +4,8 @@
 #include <stk/image/gpu_volume.h>
 #include <stk/image/volume.h>
 
+#include <chrono>
+#include <iostream>
 #include <random>
 
 void run_registration_cpu(
@@ -39,7 +41,7 @@ stk::VolumeFloat make_volume(const dim3& dims)
 
 int main(int argc, char* argv[])
 {
-    ASSERT(argc > 1);
+    using namespace std::chrono;
 
     PROFILER_INIT();
     
@@ -49,15 +51,20 @@ int main(int argc, char* argv[])
     stk::VolumeFloat moving = make_volume(dims);
 
     stk::VolumeFloat3 df(fixed.size(), {0,0,0});
-    if (strcmp(argv[1], "cpu") == 0) {
-        run_registration_cpu(fixed, moving, df);
-    }
-    else if (strcmp(argv[1], "gpu") == 0) {
-        run_registration_gpu(fixed, moving, df);
-    }
-    else {
-        ASSERT(false);
-    }
+
+    auto cpu_start = high_resolution_clock::now();
+    run_registration_cpu(fixed, moving, df);
+    auto cpu_stop = high_resolution_clock::now();
+    
+    auto gpu_start = high_resolution_clock::now();
+    run_registration_gpu(fixed, moving, df);
+    auto gpu_stop = high_resolution_clock::now();
+    
+    auto cpu_elapsed = duration_cast<milliseconds>(cpu_stop - cpu_start);
+    auto gpu_elapsed = duration_cast<milliseconds>(gpu_stop - gpu_start);
+
+    std::cout << "CPU: " << cpu_elapsed.count() << " ms" << std::endl;
+    std::cout << "GPU: " << gpu_elapsed.count() << " ms" << std::endl;
 
     PROFILER_SHUTDOWN();
 }

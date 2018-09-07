@@ -5,6 +5,8 @@
 #include <stk/image/volume.h>
 #include <stk/math/float3.h>
 
+#include <iostream>
+
 namespace {
     int _max_iteration_count = 1;
     int3 _neighbors[] = {
@@ -314,7 +316,7 @@ void run_registration_cpu(
     BlockChangeFlags change_flags(block_count); 
 
     int num_iterations = 0;
-    LOG(Info) << "Initial Energy: " << calculate_energy(unary_fn, binary_fn, df);
+    std::cout << "Initial Energy: " << calculate_energy(unary_fn, binary_fn, df) << std::endl;
 
     bool done = false;
     while (!done) {
@@ -414,5 +416,5 @@ void run_registration_cpu(
         
         PROFILER_FLIP();
     }
-    LOG(Info) << "Resulting Energy: " << calculate_energy(unary_fn, binary_fn, df);
+    std::cout << "Resulting Energy: " << calculate_energy(unary_fn, binary_fn, df) << std::endl;
 }
