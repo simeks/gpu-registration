@@ -6,6 +6,7 @@
 #include <stk/image/volume.h>
 
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <random>
 
@@ -20,24 +21,43 @@ void run_registration_gpu(
     stk::VolumeFloat3 df
 );
 
+std::mt19937 _gen(52434);
+
 stk::VolumeFloat make_volume(const dim3& dims)
 {
     stk::VolumeFloat vol(dims);
 
-    std::mt19937 gen(52434);
     std::uniform_real_distribution<float> dis(0.0f, 1.0f);
 
     for (int z = 0; z < (int)dims.z; ++z) {
     for (int y = 0; y < (int)dims.y; ++y) {
     for (int x = 0; x < (int)dims.x; ++x) {
-        vol(x,y,z) = dis(gen);
+        vol(x,y,z) = dis(_gen);
     }}}
 
-    vol.set_origin({100.0f*dis(gen), 100.0f*dis(gen), 100.0f*dis(gen)});
-    vol.set_spacing({1.9f, 1.9f, 2.6f});
+    vol.set_origin({0,0,0});
+    vol.set_spacing({1,1,1});
 
     return vol;
 }
+stk::VolumeFloat3 make_df(const dim3& dims)
+{
+    stk::VolumeFloat3 vol(dims);
+
+    std::uniform_real_distribution<float> dis(-5.0f, 5.0f);
+
+    for (int z = 0; z < (int)dims.z; ++z) {
+    for (int y = 0; y < (int)dims.y; ++y) {
+    for (int x = 0; x < (int)dims.x; ++x) {
+        vol(x,y,z) = float3{0};// dis(_gen), dis(_gen), dis(_gen) };
+    }}}
+
+    vol.set_origin({0,0,0});
+    vol.set_spacing({1,1,1});
+
+    return vol;
+}
+
 
 
 int main(int argc, char* argv[])
@@ -46,14 +66,16 @@ int main(int argc, char* argv[])
 
     PROFILER_INIT();
     
-    dim3 dims { 128, 64, 64 };
+    dim3 dims { 128, 128, 32 };
 
     stk::VolumeFloat fixed = make_volume(dims);
     stk::VolumeFloat moving = make_volume(dims);
 
-    stk::VolumeFloat3 cpu_df(fixed.size(), {0,0,0});
-    stk::VolumeFloat3 gpu_df(fixed.size(), {0,0,0});
+    stk::VolumeFloat3 cpu_df = make_df(dims); //(fixed.size(), {0,0,0});
+    stk::VolumeFloat3 gpu_df = cpu_df.clone(); //(fixed.size(), {0,0,0});
 
+    std::cout << std::fixed;
+    std::cout << std::setprecision(8);
     std::cout << "Initial Energy: " << calculate_energy(fixed, moving, cpu_df) << std::endl;
 
     auto cpu_start = high_resolution_clock::now();

@@ -38,6 +38,84 @@ struct Unary_SSD
     stk::VolumeFloat _fixed;
     stk::VolumeFloat _moving;
 };
+struct Unary_NCC
+{
+    Unary_NCC() {}
+    Unary_NCC(const stk::VolumeFloat& fixed, const stk::VolumeFloat& moving) :
+        _fixed(fixed), _moving(moving)
+    {
+    }
+
+    inline double operator()(const int3& p, const float3& d)
+    {
+        int _radius = 2;
+
+        float3 fixed_p{
+            float(p.x),
+            float(p.y),
+            float(p.z)
+        }; 
+        
+        // [fixed] -> [world] -> [moving]
+        float3 world_p = _fixed.origin() + fixed_p * _fixed.spacing();
+        float3 moving_p = (world_p + d - _moving.origin()) / _moving.spacing();
+
+        double sff = 0.0;
+        double smm = 0.0;
+        double sfm = 0.0;
+        double sf = 0.0;
+        double sm = 0.0;
+        size_t n = 0;
+
+        for (int dz = -_radius; dz <= _radius; ++dz) {
+            for (int dy = -_radius; dy <= _radius; ++dy) {
+                for (int dx = -_radius; dx <= _radius; ++dx) {
+                    // TODO: Does not account for anisotropic volumes
+                    int r2 = dx*dx + dy*dy + dz*dz;
+                    if (r2 > _radius * _radius)
+                        continue;
+
+                    int3 fp{p.x + dx, p.y + dy, p.z + dz};
+                    
+                    if (!stk::is_inside(_fixed.size(), fp))
+                        continue;
+
+                    float3 mp{moving_p.x + dx, moving_p.y + dy, moving_p.z + dz};
+
+                    float fixed_v = _fixed(fp);
+                    float moving_v = _moving.linear_at(mp, stk::Border_Constant);
+
+                    sff += fixed_v * fixed_v;
+                    smm += moving_v * moving_v;
+                    sfm += fixed_v*moving_v;
+                    sm += moving_v;
+                    sf += fixed_v;
+
+                    ++n;
+                }
+            }
+        }
+
+        if (n == 0)
+            return 0.0f;
+
+        // Subtract mean
+        sff -= (sf * sf / n);
+        smm -= (sm * sm / n);
+        sfm -= (sf * sm / n);
+        
+        double denom = sqrt(sff*smm);
+
+        if(denom > 1e-14) {
+            return 0.5f*(1.0f-float(sfm / denom));
+        }
+        return 0.0f;
+    }
+
+    stk::VolumeFloat _fixed;
+    stk::VolumeFloat _moving;
+};
+
 
 struct Binary_Regularizer
 {
@@ -64,9 +142,9 @@ struct Binary_Regularizer
     float _weight;
 };
 
-Unary_SSD make_unary_fn(const stk::VolumeFloat& fixed, const stk::VolumeFloat& moving)
+Unary_NCC make_unary_fn(const stk::VolumeFloat& fixed, const stk::VolumeFloat& moving)
 {
-    return Unary_SSD(fixed, moving);
+    return Unary_NCC(fixed, moving);
 }
 Binary_Regularizer make_binary_fn()
 {
@@ -115,7 +193,7 @@ double calculate_energy(
     const stk::VolumeFloat3& df
 )
 {
-    Unary_SSD unary_fn = make_unary_fn(fixed, moving);
+    auto unary_fn = make_unary_fn(fixed, moving);
     Binary_Regularizer binary_fn = make_binary_fn();
 
     return calculate_energy_(unary_fn, binary_fn, df);
@@ -293,8 +371,6 @@ bool do_block(
             }
         }
     }
-
-
     return changed_flag;
 }
 
@@ -304,7 +380,7 @@ void run_registration_cpu(
     stk::VolumeFloat3 df
 )
 {
-    Unary_SSD unary_fn = make_unary_fn(fixed, moving);
+    auto unary_fn = make_unary_fn(fixed, moving);
     Binary_Regularizer binary_fn = make_binary_fn();
 
     dim3 dims = df.size();
@@ -312,7 +388,7 @@ void run_registration_cpu(
     float3 step_size {0.5f, 0.5f, 0.5f};
 
     // Setting the block size to (0, 0, 0) will disable blocking and run the whole volume
-    int3 block_dims = {0,0,0};
+    int3 block_dims = _block_size;
     if (block_dims.x == 0)
         block_dims.x = dims.x;
     if (block_dims.y == 0)
@@ -326,12 +402,11 @@ void run_registration_cpu(
         int(dims.z + block_dims.z - 1) / block_dims.z
     };
     
-    BlockChangeFlags change_flags(block_count); 
-
     int num_iterations = 0;
 
     bool done = false;
     while (!done) {
+        PROFILER_SCOPE("iteration", 0xFF39842A);
         done = true;
 
         size_t num_blocks_changed = 0;
@@ -358,46 +433,32 @@ void run_registration_cpu(
                 PROFILER_SCOPE("red_black", 0xFF339955);
                 int num_blocks = real_block_count.x * real_block_count.y * real_block_count.z;
                 
-                #pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
-                for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
-                    PROFILER_SCOPE("block", 0xFFAA623D);
-                    int block_x = block_idx % real_block_count.x;
-                    int block_y = (block_idx / real_block_count.x) % real_block_count.y;
-                    int block_z = block_idx / (real_block_count.x*real_block_count.y);
+                bool block_changed = false;
+                for (int n = 0; n < 6; ++n) {
+                    PROFILER_SCOPE("step", 0xFFAA6FE2);
+                    // delta in [mm]
+                    float3 delta {
+                        step_size.x * _neighbors[n].x,
+                        step_size.y * _neighbors[n].y,
+                        step_size.z * _neighbors[n].z
+                    };
+                        
+                    #pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
+                    for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
+                        PROFILER_SCOPE("block", 0xFFAA623D);
+                        int block_x = block_idx % real_block_count.x;
+                        int block_y = (block_idx / real_block_count.x) % real_block_count.y;
+                        int block_z = block_idx / (real_block_count.x*real_block_count.y);
 
-                    int off = (block_z) % 2;
-                    off = (block_y + off) % 2;
-                    off = (block_x + off) % 2;
+                        int off = (block_z) % 2;
+                        off = (block_y + off) % 2;
+                        off = (block_x + off) % 2;
 
-                    if (off != black_or_red) {
-                        continue;
-                    }
-
-                    int3 block_p{block_x, block_y, block_z};
-
-                    bool need_update = change_flags.is_block_set(block_p, use_shift == 1);
-                    int n_count = 6; // Neighbors
-                    for (int n = 0; n < n_count; ++n) {
-                        int3 neighbor = block_p + _neighbors[n];
-                        if (0 <= neighbor.x && neighbor.x < real_block_count.x &&
-                            0 <= neighbor.y && neighbor.y < real_block_count.y &&
-                            0 <= neighbor.z && neighbor.z < real_block_count.z) {
-                            need_update = need_update || change_flags.is_block_set(neighbor, use_shift == 1);
+                        if (off != black_or_red) {
+                            continue;
                         }
-                    }
 
-                    if (!need_update) {
-                        continue;
-                    }
-
-                    bool block_changed = false;
-                    for (int n = 0; n < n_count; ++n) {
-                        // delta in [mm]
-                        float3 delta {
-                            step_size.x * _neighbors[n].x,
-                            step_size.y * _neighbors[n].y,
-                            step_size.z * _neighbors[n].z
-                        };
+                        int3 block_p{block_x, block_y, block_z};
 
                         block_changed |= do_block(
                             unary_fn,
@@ -408,12 +469,11 @@ void run_registration_cpu(
                             delta,
                             df
                         );
+
+                        if (block_changed)
+                            ++num_blocks_changed;
                     }
-
-                    if (block_changed)
-                        ++num_blocks_changed;
-
-                    change_flags.set_block(block_p, block_changed, use_shift == 1);
+                    
                 }
             }
         }

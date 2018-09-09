@@ -42,8 +42,115 @@ __global__ void ssd_kernel(
     float f1 = fixed(x,y,z) - cuda::linear_at_border<float>(
         moving, dims, moving_p1.x, moving_p1.y, moving_p1.z);
     
-    cost_acc(x,y,z).x = cost_acc(x,y,z).x + f0*f0;
-    cost_acc(x,y,z).y = cost_acc(x,y,z).y + f1*f1;
+    cost_acc(x,y,z).x = f0*f0;
+    cost_acc(x,y,z).y = f1*f1;
+}
+__global__ void ncc_kernel(
+    cuda::VolumePtr<float> fixed,
+    cuda::VolumePtr<float> moving,
+    cuda::VolumePtr<float4> df,
+    dim3 dims,
+    float3 fixed_origin,
+    float3 fixed_spacing,
+    float3 moving_origin,
+    float3 inv_moving_spacing,
+    float3 delta,
+    cuda::VolumePtr<float2> cost_acc
+)
+{
+    int x = blockIdx.x*blockDim.x + threadIdx.x;
+    int y = blockIdx.y*blockDim.y + threadIdx.y;
+    int z = blockIdx.z*blockDim.z + threadIdx.z;
+
+    if (x >= dims.x ||
+        y >= dims.y ||
+        z >= dims.z)
+    {
+        return;
+    }
+
+    float3 d0 { df(x,y,z).x, df(x,y,z).y, df(x,y,z).z };
+    float3 d1 = d0 + delta;
+
+    float3 world_p = fixed_origin + float3{float(x),float(y),float(z)} * fixed_spacing; 
+    
+    float3 moving_p0 = (world_p + d0 - moving_origin) * inv_moving_spacing; 
+    float3 moving_p1 = (world_p + d1 - moving_origin) * inv_moving_spacing; 
+
+    float sff = 0.0f;
+    float sf = 0.0f;
+    
+    float smm0 = 0.0f;
+    float sfm0 = 0.0f;
+    float sm0 = 0.0f;
+    float smm1 = 0.0f;
+    float sfm1 = 0.0f;
+    float sm1 = 0.0f;
+    unsigned int n = 0;
+
+    int radius = 2;
+
+    for (int dz = -radius; dz <= radius; ++dz) {
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                // TODO: Does not account for anisotropic volumes
+                int r2 = dx*dx + dy*dy + dz*dz;
+                if (r2 > radius * radius)
+                    continue;
+
+                int3 fp{x + dx, y + dy, z + dz};
+                
+                if (0 > fp.x || fp.x >= dims.x ||
+                    0 > fp.y || fp.y >= dims.y ||
+                    0 > fp.z || fp.z >= dims.z)
+                    continue;
+
+                float3 mp0{moving_p0.x + dx, moving_p0.y + dy, moving_p0.z + dz};
+                float3 mp1{moving_p1.x + dx, moving_p1.y + dy, moving_p1.z + dz};
+
+                float fixed_v = fixed(fp.x, fp.y, fp.z);
+                
+                float moving_v0 = cuda::linear_at_border<float>(moving, dims, mp0.x, mp0.y, mp0.z);
+                float moving_v1 = cuda::linear_at_border<float>(moving, dims, mp1.x, mp1.y, mp1.z);
+
+                sff += fixed_v * fixed_v;
+
+                smm0 += moving_v0 * moving_v0;
+                smm1 += moving_v1 * moving_v1;
+                
+                sfm0 += fixed_v*moving_v0;
+                sfm1 += fixed_v*moving_v1;
+
+                sm0 += moving_v0;
+                sm1 += moving_v1;
+
+                sf += fixed_v;
+
+                ++n;
+            }
+        }
+    }
+
+    if (n == 0)
+        return;
+
+    // Subtract mean
+    sff -= (sf * sf / n);
+    smm0 -= (sm0 * sm0 / n);
+    sfm0 -= (sf * sm0 / n);
+    
+    smm1 -= (sm1 * sm1 / n);
+    sfm1 -= (sf * sm1 / n);
+
+    float denom0 = sqrt(sff*smm0);
+    float denom1 = sqrt(sff*smm1);
+
+    if(denom0 > 1e-14) {
+        cost_acc(x,y,z).x = 0.5f*(1.0f-float(sfm0 / denom0));
+    }
+    if(denom1 > 1e-14) {
+        cost_acc(x,y,z).y = 0.5f*(1.0f-float(sfm1 / denom1));
+    }
 }
 
 void gpu_compute_unary_cost(
@@ -69,7 +176,7 @@ void gpu_compute_unary_cost(
         (dims.z + block_size.z - 1) / block_size.z
     };
 
-    ssd_kernel<<<grid_size, block_size, 0, stream>>>(
+    ncc_kernel<<<grid_size, block_size, 0, stream>>>(
         fixed,
         moving,
         df,
@@ -160,9 +267,9 @@ __global__ void regularizer_kernel(
         o_z.z = dist2_10;
     }
 
-    cost_x(x,y,z) = o_x;
-    cost_y(x,y,z) = o_y;
-    cost_z(x,y,z) = o_z;
+    cost_x(x,y,z) = weight*o_x;
+    cost_y(x,y,z) = weight*o_y;
+    cost_z(x,y,z) = weight*o_z;
 }
 
 
