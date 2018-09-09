@@ -1,3 +1,4 @@
+#include "gpu_pipeline.h"
 #include "graph_cut.h"
 #include "profiler/profiler.h"
 #include "registration.h"
@@ -7,33 +8,6 @@
 #include <stk/image/volume.h>
 
 #include <iostream>
-
-void gpu_compute_unary_cost(
-    const stk::GpuVolume& fixed,
-    const stk::GpuVolume& moving,
-    const stk::GpuVolume& df,
-    const float3& delta,
-    stk::GpuVolume& unary_cost, // float2
-    stk::cuda::Stream& stream
-);
-void gpu_compute_binary_cost(
-    const stk::GpuVolume& df,
-    const float3& delta,
-    float weight,
-    stk::GpuVolume& cost_x, // float4
-    stk::GpuVolume& cost_y, // float4
-    stk::GpuVolume& cost_z,  // float4
-    stk::cuda::Stream& stream
-);
-
-// Applies the specified delta to all voxels where label != 0
-void gpu_apply_displacement_delta(
-    stk::GpuVolume& df, 
-    const stk::GpuVolume& labels, 
-    const float3& delta,
-    stk::cuda::Stream& stream
-);
-
 // Pads vectorfield of type float3 to float4
 stk::VolumeFloat4 df_float3_to_float4(const stk::VolumeFloat3& df)
 {
@@ -298,33 +272,12 @@ void run_registration_gpu(
 
     stk::VolumeFloat4 df = df_float3_to_float4(initial_df);
     stk::GpuVolume gpu_df = stk::GpuVolume(df);
-
-    stk::VolumeFloat2 unary_cost(
-        stk::Volume(dims, stk::Type_Float2, nullptr, stk::Usage_Pinned)
-    );
-    unary_cost.fill(float2{0});
-
-    stk::GpuVolume gpu_unary_cost(unary_cost);
-
-    stk::VolumeFloat4 binary_cost_x(
-        stk::Volume(dims, stk::Type_Float4, nullptr, stk::Usage_Pinned)
-    );
-    stk::VolumeFloat4 binary_cost_y(
-        stk::Volume(dims, stk::Type_Float4, nullptr, stk::Usage_Pinned)
-    );
-    stk::VolumeFloat4 binary_cost_z(
-        stk::Volume(dims, stk::Type_Float4, nullptr, stk::Usage_Pinned)
-    );
     
-    stk::GpuVolume gpu_binary_cost_x(binary_cost_x);
-    stk::GpuVolume gpu_binary_cost_y(binary_cost_y);
-    stk::GpuVolume gpu_binary_cost_z(binary_cost_z);
-    
-    // Movement labels, updated per step
-    stk::VolumeUChar labels(
-        stk::Volume(dims, stk::Type_UChar, nullptr, stk::Usage_Pinned)
+    GpuPipeline pipeline(
+        gpu_fixed,
+        gpu_moving,
+        gpu_df
     );
-    stk::GpuVolume gpu_labels(labels);
 
     float3 step_size {0.5f, 0.5f, 0.5f};
 
@@ -353,7 +306,7 @@ void run_registration_gpu(
         
         size_t num_blocks_changed = 0;
 
-        for (int use_shift = 0; use_shift < 2; ++use_shift) {
+        for (int use_shift = 0; use_shift < 1; ++use_shift) {
             PROFILER_SCOPE("shift", 0xFF766952);
             if (use_shift == 1 && (block_count.x * block_count.y * block_count.z) <= 1)
                 continue;
@@ -378,46 +331,14 @@ void run_registration_gpu(
                 bool block_changed = false;
                 for (int n = 0; n < 6; ++n) {
                     PROFILER_SCOPE("step", 0xFFAA6FE2);
-                
+
                     // delta in [mm]
                     float3 delta {
                         step_size.x * _neighbors[n].x,
                         step_size.y * _neighbors[n].y,
                         step_size.z * _neighbors[n].z
                     };
-
-                    {
-                        PROFILER_SCOPE("compute", 0xFF941223);
-                        gpu_compute_unary_cost(
-                            gpu_fixed,
-                            gpu_moving,
-                            gpu_df,
-                            delta,
-                            gpu_unary_cost,
-                            stream_1
-                        );
-                        gpu_unary_cost.download(unary_cost, stream_1);
-
-                        gpu_compute_binary_cost(
-                            gpu_df,
-                            delta,
-                            _regularization_weight,
-                            gpu_binary_cost_x,
-                            gpu_binary_cost_y,
-                            gpu_binary_cost_z,
-                            stream_2
-                        );
-                        gpu_binary_cost_x.download(binary_cost_x, stream_2);
-                        gpu_binary_cost_y.download(binary_cost_y, stream_2);
-                        gpu_binary_cost_z.download(binary_cost_z, stream_2);
-
-                        stream_1.synchronize();
-                        stream_2.synchronize();
-                    }
-
-                    labels.fill(0);
     
-                    #pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
                     for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
                         PROFILER_SCOPE("block", 0xFFAA623D);
                         int block_x = block_idx % real_block_count.x;
@@ -431,29 +352,11 @@ void run_registration_gpu(
                         if (off != black_or_red) {
                             continue;
                         }
-
                         int3 block_p{block_x, block_y, block_z};
 
-                        block_changed |= do_block(
-                            unary_cost,
-                            binary_cost_x,
-                            binary_cost_y,
-                            binary_cost_z,
-                            block_p,
-                            block_dims,
-                            block_offset,
-                            labels
-                        );
-
-                        if (block_changed)
-                            ++num_blocks_changed;
-
+                        pipeline.enqueue_block({block_p, block_dims, block_offset});
                     }
-
-                    gpu_labels.upload(labels);
-
-                    gpu_apply_displacement_delta(gpu_df, gpu_labels, delta, stk::cuda::Stream::null());
-                    
+                    pipeline.dispatch(delta);
                 }
             }
         }
