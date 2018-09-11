@@ -212,7 +212,7 @@ public:
             _gpu_binary_cost_x.download(_binary_cost_x, _streams[0]);
             _gpu_binary_cost_y.download(_binary_cost_y, _streams[0]);
             _gpu_binary_cost_z.download(_binary_cost_z, _streams[0]);
-            print4(_gpu_binary_cost_z);
+
             // stk::VolumeFloat4 sub_binary_x(_binary_cost_x,
             //     { gx, gx + block.dims.x },
             //     { gy, gy + block.dims.y },

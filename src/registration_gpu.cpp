@@ -105,38 +105,34 @@ bool do_block(
 
                     current_energy += f0;
 
-                    // if (sub_x + 1 < block_dims.x && gx + 1 < int(dims.x)) {
-                    //     double f_same = binary_cost_x(gx,gy,gz).x;
-                    //     double f01 = binary_cost_x(gx,gy,gz).y;
-                    //     double f10 = binary_cost_x(gx,gy,gz).z;
+                    if (sub_x + 1 < block_dims.x && gx + 1 < int(dims.x)) {
+                        double f_same = binary_cost_x(gx,gy,gz).x;
+                        double f01 = binary_cost_x(gx,gy,gz).y;
+                        double f10 = binary_cost_x(gx,gy,gz).z;
 
-                    //     graph.add_term2(
-                    //         sub_x, sub_y, sub_z,
-                    //         sub_x + 1, sub_y, sub_z, 
-                    //         f_same, f01, f10, f_same);
+                        graph.add_term2(
+                            sub_x, sub_y, sub_z,
+                            sub_x + 1, sub_y, sub_z, 
+                            f_same, f01, f10, f_same);
 
-                    //     current_energy += f_same;
-                    // }
-                    // if (sub_y + 1 < block_dims.y && gy + 1 < int(dims.y)) {
-                    //     double f_same = binary_cost_y(gx,gy,gz).x;
-                    //     double f01 = binary_cost_y(gx,gy,gz).y;
-                    //     double f10 = binary_cost_y(gx,gy,gz).z;
+                        current_energy += f_same;
+                    }
+                    if (sub_y + 1 < block_dims.y && gy + 1 < int(dims.y)) {
+                        double f_same = binary_cost_y(gx,gy,gz).x;
+                        double f01 = binary_cost_y(gx,gy,gz).y;
+                        double f10 = binary_cost_y(gx,gy,gz).z;
 
-                    //     graph.add_term2(
-                    //         sub_x, sub_y, sub_z,
-                    //         sub_x, sub_y + 1, sub_z, 
-                    //         f_same, f01, f10, f_same);
+                        graph.add_term2(
+                            sub_x, sub_y, sub_z,
+                            sub_x, sub_y + 1, sub_z, 
+                            f_same, f01, f10, f_same);
 
-                    //     current_energy += f_same;
-                    // }
+                        current_energy += f_same;
+                    }
                     if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
                         double f_same = binary_cost_z(gx,gy,gz).x;
                         double f01 = binary_cost_z(gx,gy,gz).y;
                         double f10 = binary_cost_z(gx,gy,gz).z;
-
-                        printf("GPU %d %d %d : %f %f %f\n", gx, gy, gz, 
-                            f_same, f01, f10
-                        );
 
                         graph.add_term2(
                             sub_x, sub_y, sub_z,
@@ -290,11 +286,8 @@ void run_registration_gpu(
                         pipeline.enqueue_block({block_p, block_dims, block_offset});
                     }
                     pipeline.dispatch(delta);
-                    break;
                 }
-                    break;
             }
-                    break;
         }
 
         done = num_blocks_changed == 0;

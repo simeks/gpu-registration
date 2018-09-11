@@ -311,7 +311,7 @@ __global__ void regularizer_kernel(
     // TODO:
     // Compute cost at block border
     
-    if (threadIdx.x == 0 && gx != 0) {
+    if (x == 0 && gx != 0) {
         float3 dx = {df(gx-1,gy,gz).x, df(gx-1,gy,gz).y, df(gx-1,gy,gz).z};
         
         float3 diff_00 = d - dx;
@@ -322,10 +322,10 @@ __global__ void regularizer_kernel(
         
         cost_x(gx-1,gy,gz).x = weight*dist2_00;
         cost_x(gx-1,gy,gz).y = weight*dist2_01;
-        //cost_x(gx-1,gy,gz).z = weight*dist2_00; // border nodes can't move
+        cost_x(gx-1,gy,gz).z = weight*dist2_00; // border nodes can't move
     }
     
-    if (threadIdx.y == 0 && gy != 0) {
+    if (y == 0 && gy != 0) {
         float3 dy = {df(gx,gy-1,gz).x, df(gx,gy-1,gz).y, df(gx,gy-1,gz).z};
         
         float3 diff_00 = d - dy;
@@ -336,10 +336,10 @@ __global__ void regularizer_kernel(
         
         cost_y(gx,gy-1,gz).x = weight*dist2_00;
         cost_y(gx,gy-1,gz).y = weight*dist2_01;
-        //cost_y(gx,gy-1,gz).z = weight*dist2_00; // border nodes can't move
+        cost_y(gx,gy-1,gz).z = weight*dist2_00; // border nodes can't move
     }
 
-    if (threadIdx.z == 0 && gz != 0) {
+    if (z == 0 && gz != 0) {
         float3 dz = {df(gx,gy,gz-1).x, df(gx,gy,gz-1).y, df(gx,gy,gz-1).z};
         
         float3 diff_00 = d - dz;
@@ -350,7 +350,7 @@ __global__ void regularizer_kernel(
         
         cost_z(gx,gy,gz-1).x = weight*dist2_00;
         cost_z(gx,gy,gz-1).y = weight*dist2_01;
-        //cost_z(gx,gy,gz-1).z = weight*dist2_00; // border nodes can't move
+        cost_z(gx,gy,gz-1).z = weight*dist2_00; // border nodes can't move
     }
 
 }
