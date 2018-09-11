@@ -13,12 +13,16 @@ void gpu_compute_unary_cost(
     const stk::GpuVolume& fixed,
     const stk::GpuVolume& moving,
     const stk::GpuVolume& df,
+    const int3& block_offset,
+    const int3& block_dims,
     const float3& delta,
     stk::GpuVolume& unary_cost, // float2
     stk::cuda::Stream& stream
 );
 void gpu_compute_binary_cost(
     const stk::GpuVolume& df,
+    const int3& block_offset,
+    const int3& block_dims,
     const float3& delta,
     float weight,
     stk::GpuVolume& cost_x, // float4
@@ -151,96 +155,84 @@ public:
             int gy = block.p.y * block.dims.y - block.offset.y;
             int gz = block.p.z * block.dims.z - block.offset.z;
 
-            stk::GpuVolume sub_f(_fixed, 
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-            print(sub_f);
-            print(_fixed);
-
-            stk::GpuVolume sub_m(_moving, 
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-
-            stk::GpuVolume sub_df(_df, 
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-
-            stk::GpuVolume sub_unary_gpu(_gpu_unary_cost,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
 
             gpu_compute_unary_cost(
-                sub_f,
-                sub_m,
-                sub_df,
+                _fixed,
+                _moving,
+                _df,
+                int3{gx, gy, gz},
+                block.dims,
                 delta,
-                sub_unary_gpu,
+                _gpu_unary_cost,
                 _streams[0]
             );
             
-            stk::VolumeFloat2 sub_unary(_unary_cost,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-            sub_unary_gpu.download(sub_unary, _streams[0]);
+            // stk::VolumeFloat2 sub_unary(_unary_cost,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
+            // sub_unary_gpu.download(sub_unary, _streams[0]);
             _gpu_unary_cost.download(_unary_cost, _streams[0]);
+            // stk::GpuVolume sub_unary_gpu(_gpu_unary_cost,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
 
-            stk::GpuVolume sub_binary_x_gpu(_gpu_binary_cost_x,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-            stk::GpuVolume sub_binary_y_gpu(_gpu_binary_cost_y,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
+            // stk::GpuVolume sub_binary_x_gpu(_gpu_binary_cost_x,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
+            // stk::GpuVolume sub_binary_y_gpu(_gpu_binary_cost_y,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
 
-            stk::GpuVolume sub_binary_z_gpu(_gpu_binary_cost_z,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
+            // stk::GpuVolume sub_binary_z_gpu(_gpu_binary_cost_z,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
 
             gpu_compute_binary_cost(
-                sub_df,
+                _df,
+                int3{gx, gy, gz},
+                block.dims,
                 delta,
                 _regularization_weight,
-                sub_binary_x_gpu,
-                sub_binary_y_gpu,
-                sub_binary_z_gpu,
+                _gpu_binary_cost_x,
+                _gpu_binary_cost_y,
+                _gpu_binary_cost_z,
                 _streams[0]
             );
             
-            stk::VolumeFloat4 sub_binary_x(_binary_cost_x,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-            sub_binary_x_gpu.download(sub_binary_x, _streams[0]);
+            _gpu_binary_cost_x.download(_binary_cost_x, _streams[0]);
+            _gpu_binary_cost_y.download(_binary_cost_y, _streams[0]);
+            _gpu_binary_cost_z.download(_binary_cost_z, _streams[0]);
+            print4(_gpu_binary_cost_z);
+            // stk::VolumeFloat4 sub_binary_x(_binary_cost_x,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
+            // sub_binary_x_gpu.download(sub_binary_x, _streams[0]);
 
-            stk::VolumeFloat4 sub_binary_y(_binary_cost_y,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-            sub_binary_y_gpu.download(sub_binary_y, _streams[0]);
+            // stk::VolumeFloat4 sub_binary_y(_binary_cost_y,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
+            // sub_binary_y_gpu.download(sub_binary_y, _streams[0]);
             
-            stk::VolumeFloat4 sub_binary_z(_binary_cost_z,
-                { gx, gx + block.dims.x },
-                { gy, gy + block.dims.y },
-                { gz, gz + block.dims.z }
-            );
-            sub_binary_z_gpu.download(sub_binary_z, _streams[0]);
+            // stk::VolumeFloat4 sub_binary_z(_binary_cost_z,
+            //     { gx, gx + block.dims.x },
+            //     { gy, gy + block.dims.y },
+            //     { gz, gz + block.dims.z }
+            // );
+            // sub_binary_z_gpu.download(sub_binary_z, _streams[0]);
 
             _streams[0].synchronize();
 

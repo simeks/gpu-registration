@@ -5,7 +5,7 @@
 
 inline const int _max_iteration_count = 1;
 inline const float _regularization_weight = 0.1f;
-inline const int3 _block_size {2,1,1};
+inline const int3 _block_size {2,2,2};
 inline const int3 _neighbors[] = {
     {1, 0, 0},
     {-1, 0, 0},

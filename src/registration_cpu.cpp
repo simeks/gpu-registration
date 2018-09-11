@@ -74,11 +74,11 @@ struct Unary_NCC
                     int r2 = dx*dx + dy*dy + dz*dz;
                     if (r2 > _radius * _radius)
                         continue;
-
                     int3 fp{p.x + dx, p.y + dy, p.z + dz};
                     
                     if (!stk::is_inside(_fixed.size(), fp))
                         continue;
+
 
                     float3 mp{moving_p.x + dx, moving_p.y + dy, moving_p.z + dz};
 
@@ -242,48 +242,46 @@ bool do_block(
                     double f0 = unary_fn(p, def1);
                     double f1 = unary_fn(p, def1 + delta);
 
-                    printf("CPU: %d %d %d : %f %f\n", gx, gy, gz, f0, f1);
-                    
                     // Block borders (excl image borders) (T-weights with binary term for neighboring voxels)
 
-                    // if (sub_x == 0 && gx != 0) {
-                    //     int3 step{-1, 0, 0};
-                    //     float3 def2 = df(gx - 1, gy, gz);
-                    //     f0 += binary_fn(p, def1, def2, step);
-                    //     f1 += binary_fn(p, def1 + delta, def2, step);
-                    // }
-                    // else if (sub_x == block_dims.x - 1 && gx < int(dims.x) - 1) {
-                    //     int3 step{1, 0, 0};
-                    //     float3 def2 = df(gx + 1, gy, gz);
-                    //     f0 += binary_fn(p, def1, def2, step);
-                    //     f1 += binary_fn(p, def1 + delta, def2, step);
-                    // }
+                    if (sub_x == 0 && gx != 0) {
+                        int3 step{-1, 0, 0};
+                        float3 def2 = df(gx - 1, gy, gz);
+                        f0 += binary_fn(p, def1, def2, step);
+                        f1 += binary_fn(p, def1 + delta, def2, step);
+                    }
+                    else if (sub_x == block_dims.x - 1 && gx < int(dims.x) - 1) {
+                        int3 step{1, 0, 0};
+                        float3 def2 = df(gx + 1, gy, gz);
+                        f0 += binary_fn(p, def1, def2, step);
+                        f1 += binary_fn(p, def1 + delta, def2, step);
+                    }
 
-                    // if (sub_y == 0 && gy != 0) {
-                    //     int3 step{0, -1, 0};
-                    //     float3 def2 = df(gx, gy - 1, gz);
-                    //     f0 += binary_fn(p, def1, def2, step);
-                    //     f1 += binary_fn(p, def1 + delta, def2, step);
-                    // }
-                    // else if (sub_y == block_dims.y - 1 && gy < int(dims.y) - 1) {
-                    //     int3 step{0, 1, 0};
-                    //     float3 def2 = df(gx, gy + 1, gz);
-                    //     f0 += binary_fn(p, def1, def2, step);
-                    //     f1 += binary_fn(p, def1 + delta, def2, step);
-                    // }
+                    if (sub_y == 0 && gy != 0) {
+                        int3 step{0, -1, 0};
+                        float3 def2 = df(gx, gy - 1, gz);
+                        f0 += binary_fn(p, def1, def2, step);
+                        f1 += binary_fn(p, def1 + delta, def2, step);
+                    }
+                    else if (sub_y == block_dims.y - 1 && gy < int(dims.y) - 1) {
+                        int3 step{0, 1, 0};
+                        float3 def2 = df(gx, gy + 1, gz);
+                        f0 += binary_fn(p, def1, def2, step);
+                        f1 += binary_fn(p, def1 + delta, def2, step);
+                    }
 
-                    // if (sub_z == 0 && gz != 0) {
-                    //     int3 step{0, 0, -1};
-                    //     float3 def2 = df(gx, gy, gz - 1);
-                    //     f0 += binary_fn(p, def1, def2, step);
-                    //     f1 += binary_fn(p, def1 + delta, def2, step);
-                    // }
-                    // else if (sub_z == block_dims.z - 1 && gz < int(dims.z) - 1) {
-                    //     int3 step{0, 0, 1};
-                    //     float3 def2 = df(gx, gy, gz + 1);
-                    //     f0 += binary_fn(p, def1, def2, step);
-                    //     f1 += binary_fn(p, def1 + delta, def2, step);
-                    // }
+                    if (sub_z == 0 && gz != 0) {
+                        int3 step{0, 0, -1};
+                        float3 def2 = df(gx, gy, gz - 1);
+                        f0 += binary_fn(p, def1, def2, step);
+                        f1 += binary_fn(p, def1 + delta, def2, step);
+                    }
+                    else if (sub_z == block_dims.z - 1 && gz < int(dims.z) - 1) {
+                        int3 step{0, 0, 1};
+                        float3 def2 = df(gx, gy, gz + 1);
+                        f0 += binary_fn(p, def1, def2, step);
+                        f1 += binary_fn(p, def1 + delta, def2, step);
+                    }
 
                     graph.add_term1(sub_x, sub_y, sub_z, f0, f1);
 
@@ -317,20 +315,24 @@ bool do_block(
 
                     //     current_energy += f_same;
                     // }
-                    // if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
-                    //     int3 step{0, 0, 1};
-                    //     float3 def2 = df(p + step);
-                    //     double f_same = binary_fn(p, def1, def2, step);
-                    //     double f01 = binary_fn(p, def1, def2 + delta, step);
-                    //     double f10 = binary_fn(p, def1 + delta, def2, step);
+                    if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
+                        int3 step{0, 0, 1};
+                        float3 def2 = df(p + step);
+                        double f_same = binary_fn(p, def1, def2, step);
+                        double f01 = binary_fn(p, def1, def2 + delta, step);
+                        double f10 = binary_fn(p, def1 + delta, def2, step);
 
-                    //     graph.add_term2(
-                    //         sub_x, sub_y, sub_z,
-                    //         sub_x, sub_y, sub_z + 1,
-                    //         f_same, f01, f10, f_same);
+                        printf("CPU %d %d %d : %f %f %f\n", gx, gy, gz, 
+                            f_same, f01, f10
+                        );
 
-                    //     current_energy += f_same;
-                    // }
+                        graph.add_term2(
+                            sub_x, sub_y, sub_z,
+                            sub_x, sub_y, sub_z + 1,
+                            f_same, f01, f10, f_same);
+
+                        current_energy += f_same;
+                    }
                 }
             }
         }
@@ -445,7 +447,7 @@ void run_registration_cpu(
                         step_size.z * _neighbors[n].z
                     };
                         
-                    #pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
+                    //#pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
                     for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
                         PROFILER_SCOPE("block", 0xFFAA623D);
                         int block_x = block_idx % real_block_count.x;

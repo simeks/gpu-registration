@@ -45,11 +45,18 @@ __global__ void ssd_kernel(
     cost_acc(x,y,z).x = f0*f0;
     cost_acc(x,y,z).y = f1*f1;
 }
+inline __device__ bool is_inside(const dim3& dims, const int3& p)
+{
+    return (p.x >= 0 && p.x < int(dims.x) && p.y >= 0 && p.y < int(dims.y) && p.z >= 0 && p.z < int(dims.z));
+}
 __global__ void ncc_kernel(
     cuda::VolumePtr<float> fixed,
     cuda::VolumePtr<float> moving,
     cuda::VolumePtr<float4> df,
-    dim3 dims,
+    dim3 fixed_dims, // Full fixed volume dims
+    dim3 moving_dims, // Full moving volume dims
+    int3 block_offset,
+    int3 block_dims,
     float3 fixed_origin,
     float3 fixed_spacing,
     float3 moving_origin,
@@ -62,17 +69,28 @@ __global__ void ncc_kernel(
     int y = blockIdx.y*blockDim.y + threadIdx.y;
     int z = blockIdx.z*blockDim.z + threadIdx.z;
 
-    if (x >= dims.x ||
-        y >= dims.y ||
-        z >= dims.z)
+    if (x >= block_dims.x ||
+        y >= block_dims.y ||
+        z >= block_dims.z)
     {
         return;
     }
 
-    float3 d0 { df(x,y,z).x, df(x,y,z).y, df(x,y,z).z };
+    int gx = x + block_offset.x;
+    int gy = y + block_offset.y;
+    int gz = z + block_offset.z;
+
+    if (gx >= fixed_dims.x ||
+        gy >= fixed_dims.y ||
+        gz >= fixed_dims.z)
+    {
+        return;
+    }
+
+    float3 d0 { df(gx,gy,gz).x, df(gx, gy, gz).y, df(gx, gy, gz).z };
     float3 d1 = d0 + delta;
 
-    float3 world_p = fixed_origin + float3{float(x),float(y),float(z)} * fixed_spacing; 
+    float3 world_p = fixed_origin + float3{float(gx),float(gy),float(gz)} * fixed_spacing; 
     
     float3 moving_p0 = (world_p + d0 - moving_origin) * inv_moving_spacing; 
     float3 moving_p1 = (world_p + d1 - moving_origin) * inv_moving_spacing; 
@@ -98,20 +116,18 @@ __global__ void ncc_kernel(
                 if (r2 > radius * radius)
                     continue;
 
-                int3 fp{x + dx, y + dy, z + dz};
+                int3 fp{gx + dx, gy + dy, gz + dz};
                 
-                if (0 > fp.x || fp.x >= dims.x ||
-                    0 > fp.y || fp.y >= dims.y ||
-                    0 > fp.z || fp.z >= dims.z)
+                if (!is_inside(fixed_dims, fp))
                     continue;
 
                 float3 mp0{moving_p0.x + dx, moving_p0.y + dy, moving_p0.z + dz};
                 float3 mp1{moving_p1.x + dx, moving_p1.y + dy, moving_p1.z + dz};
 
                 float fixed_v = fixed(fp.x, fp.y, fp.z);
-                
-                float moving_v0 = cuda::linear_at_border<float>(moving, dims, mp0.x, mp0.y, mp0.z);
-                float moving_v1 = cuda::linear_at_border<float>(moving, dims, mp1.x, mp1.y, mp1.z);
+
+                float moving_v0 = cuda::linear_at_border<float>(moving, moving_dims, mp0.x, mp0.y, mp0.z);
+                float moving_v1 = cuda::linear_at_border<float>(moving, moving_dims, mp1.x, mp1.y, mp1.z);
 
                 sff += fixed_v * fixed_v;
 
@@ -152,19 +168,21 @@ __global__ void ncc_kernel(
     if(denom1 > 1e-14) {
         out.y = 0.5f*(1.0f-float(sfm1 / denom1));
     }
-    cost_acc(x,y,z) = out;
+
+    cost_acc(gx,gy,gz) = out;
 }
 
 void gpu_compute_unary_cost(
     const stk::GpuVolume& fixed,
     const stk::GpuVolume& moving,
     const stk::GpuVolume& df,
+    const int3& block_offset,
+    const int3& block_dims,
     const float3& delta,
     stk::GpuVolume& unary_cost, // float2
     cuda::Stream& stream
 )
 {
-    dim3 dims = fixed.size();
     float3 inv_moving_spacing = {
         1.0f / moving.spacing().x,
         1.0f / moving.spacing().y,
@@ -173,16 +191,19 @@ void gpu_compute_unary_cost(
 
     dim3 block_size {16,16,1};
     dim3 grid_size {
-        (dims.x + block_size.x - 1) / block_size.x,
-        (dims.y + block_size.y - 1) / block_size.y,
-        (dims.z + block_size.z - 1) / block_size.z
+        (block_dims.x + block_size.x - 1) / block_size.x,
+        (block_dims.y + block_size.y - 1) / block_size.y,
+        (block_dims.z + block_size.z - 1) / block_size.z
     };
 
     ncc_kernel<<<grid_size, block_size, 0, stream>>>(
         fixed,
         moving,
         df,
-        dims,
+        fixed.size(),
+        moving.size(),
+        block_offset,
+        block_dims,
         fixed.origin(),
         fixed.spacing(),
         moving.origin(),
@@ -190,12 +211,13 @@ void gpu_compute_unary_cost(
         delta,
         unary_cost
     );
-    CUDA_CHECK_ERRORS(cudaPeekAtLastError());
 }
 
 __global__ void regularizer_kernel(
     cuda::VolumePtr<float4> df,
     dim3 dims,
+    int3 block_offset,
+    int3 block_dims,
     float3 delta,
     float weight,
     cuda::VolumePtr<float4> cost_x,
@@ -207,9 +229,20 @@ __global__ void regularizer_kernel(
     int y = blockIdx.y*blockDim.y + threadIdx.y;
     int z = blockIdx.z*blockDim.z + threadIdx.z;
 
-    if (x >= dims.x ||
-        y >= dims.y ||
-        z >= dims.z)
+    if (x >= block_dims.x ||
+        y >= block_dims.y ||
+        z >= block_dims.z)
+    {
+        return;
+    }
+
+    int gx = x + block_offset.x;
+    int gy = y + block_offset.y;
+    int gz = z + block_offset.z;
+
+    if (gx >= dims.x ||
+        gy >= dims.y ||
+        gz >= dims.z)
     {
         return;
     }
@@ -218,66 +251,115 @@ __global__ void regularizer_kernel(
 
     // Cost ordered as f_same, f01, f10, f_same
 
-    float4 o_x = {0, 0, 0, 0};
-    float4 o_y = {0, 0, 0, 0};
-    float4 o_z = {0, 0, 0, 0};
+    float3 d = {df(gx,gy,gz).x, df(gx,gy,gz).y, df(gx,gy,gz).z};
+    {
+        float4 o_x = {0, 0, 0, 0};
+        float4 o_y = {0, 0, 0, 0};
+        float4 o_z = {0, 0, 0, 0};
 
-    float3 d = {df(x,y,z).x, df(x,y,z).y, df(x,y,z).z};
-    float3 dx = {df(x+1,y,z).x, df(x+1,y,z).y, df(x+1,y,z).z};
-    float3 dy = {df(x,y+1,z).x, df(x,y+1,z).y, df(x,y+1,z).z};
-    float3 dz = {df(x,y,z+1).x, df(x,y,z+1).y, df(x,y,z+1).z};
+        float3 dx = {df(gx+1,gy,gz).x, df(gx+1,gy,gz).y, df(gx+1,gy,gz).z};
+        float3 dy = {df(gx,gy+1,gz).x, df(gx,gy+1,gz).y, df(gx,gy+1,gz).z};
+        float3 dz = {df(gx,gy,gz+1).x, df(gx,gy,gz+1).y, df(gx,gy,gz+1).z};
 
-    if (x + 1 < dims.x) {
+        if (x + 1 < dims.x) {
+            float3 diff_00 = d - dx;
+            float dist2_00 = diff_00.x*diff_00.x + diff_00.y*diff_00.y + diff_00.z*diff_00.z;
+            
+            float3 diff_01 = d - (dx+delta);
+            float dist2_01 = diff_01.x*diff_01.x + diff_01.y*diff_01.y + diff_01.z*diff_01.z;
+            
+            float3 diff_10 = (d+delta) - dx;
+            float dist2_10 = diff_10.x*diff_10.x + diff_10.y*diff_10.y + diff_10.z*diff_10.z;
+            
+            o_x.x = dist2_00;
+            o_x.y = dist2_01;
+            o_x.z = dist2_10;
+        }
+        if (y + 1 < dims.y) {
+            float3 diff_00 = d - dy;
+            float dist2_00 = diff_00.x*diff_00.x + diff_00.y*diff_00.y + diff_00.z*diff_00.z;
+            
+            float3 diff_01 = d - (dy+delta);
+            float dist2_01 = diff_01.x*diff_01.x + diff_01.y*diff_01.y + diff_01.z*diff_01.z;
+            
+            float3 diff_10 = (d+delta) - dy;
+            float dist2_10 = diff_10.x*diff_10.x + diff_10.y*diff_10.y + diff_10.z*diff_10.z;
+            
+            o_y.x = dist2_00;
+            o_y.y = dist2_01;
+            o_y.z = dist2_10;
+        }
+        if (z + 1 < dims.z) {
+            float3 diff_00 = d - dz;
+            float dist2_00 = diff_00.x*diff_00.x + diff_00.y*diff_00.y + diff_00.z*diff_00.z;
+            
+            float3 diff_01 = d - (dz+delta);
+            float dist2_01 = diff_01.x*diff_01.x + diff_01.y*diff_01.y + diff_01.z*diff_01.z;
+            
+            float3 diff_10 = (d+delta) - dz;
+            float dist2_10 = diff_10.x*diff_10.x + diff_10.y*diff_10.y + diff_10.z*diff_10.z;
+            
+            o_z.x = dist2_00;
+            o_z.y = dist2_01;
+            o_z.z = dist2_10;
+        }
+        cost_x(gx,gy,gz) = weight*o_x;
+        cost_y(gx,gy,gz) = weight*o_y;
+        cost_z(gx,gy,gz) = weight*o_z;
+    }
+
+    // TODO:
+    // Compute cost at block border
+    
+    if (threadIdx.x == 0 && gx != 0) {
+        float3 dx = {df(gx-1,gy,gz).x, df(gx-1,gy,gz).y, df(gx-1,gy,gz).z};
+        
         float3 diff_00 = d - dx;
         float dist2_00 = diff_00.x*diff_00.x + diff_00.y*diff_00.y + diff_00.z*diff_00.z;
         
-        float3 diff_01 = d - (dx+delta);
+        float3 diff_01 = (d+delta) - dx;
         float dist2_01 = diff_01.x*diff_01.x + diff_01.y*diff_01.y + diff_01.z*diff_01.z;
         
-        float3 diff_10 = (d+delta) - dx;
-        float dist2_10 = diff_10.x*diff_10.x + diff_10.y*diff_10.y + diff_10.z*diff_10.z;
-        
-        o_x.x = dist2_00;
-        o_x.y = dist2_01;
-        o_x.z = dist2_10;
+        cost_x(gx-1,gy,gz).x = weight*dist2_00;
+        cost_x(gx-1,gy,gz).y = weight*dist2_01;
+        //cost_x(gx-1,gy,gz).z = weight*dist2_00; // border nodes can't move
     }
-    if (y + 1 < dims.y) {
+    
+    if (threadIdx.y == 0 && gy != 0) {
+        float3 dy = {df(gx,gy-1,gz).x, df(gx,gy-1,gz).y, df(gx,gy-1,gz).z};
+        
         float3 diff_00 = d - dy;
         float dist2_00 = diff_00.x*diff_00.x + diff_00.y*diff_00.y + diff_00.z*diff_00.z;
         
-        float3 diff_01 = d - (dy+delta);
+        float3 diff_01 = (d+delta) - dy;
         float dist2_01 = diff_01.x*diff_01.x + diff_01.y*diff_01.y + diff_01.z*diff_01.z;
         
-        float3 diff_10 = (d+delta) - dy;
-        float dist2_10 = diff_10.x*diff_10.x + diff_10.y*diff_10.y + diff_10.z*diff_10.z;
-        
-        o_y.x = dist2_00;
-        o_y.y = dist2_01;
-        o_y.z = dist2_10;
+        cost_y(gx,gy-1,gz).x = weight*dist2_00;
+        cost_y(gx,gy-1,gz).y = weight*dist2_01;
+        //cost_y(gx,gy-1,gz).z = weight*dist2_00; // border nodes can't move
     }
-    if (z + 1 < dims.z) {
+
+    if (threadIdx.z == 0 && gz != 0) {
+        float3 dz = {df(gx,gy,gz-1).x, df(gx,gy,gz-1).y, df(gx,gy,gz-1).z};
+        
         float3 diff_00 = d - dz;
         float dist2_00 = diff_00.x*diff_00.x + diff_00.y*diff_00.y + diff_00.z*diff_00.z;
         
-        float3 diff_01 = d - (dz+delta);
+        float3 diff_01 = (d+delta) - dz;
         float dist2_01 = diff_01.x*diff_01.x + diff_01.y*diff_01.y + diff_01.z*diff_01.z;
         
-        float3 diff_10 = (d+delta) - dz;
-        float dist2_10 = diff_10.x*diff_10.x + diff_10.y*diff_10.y + diff_10.z*diff_10.z;
-        
-        o_z.x = dist2_00;
-        o_z.y = dist2_01;
-        o_z.z = dist2_10;
+        cost_z(gx,gy,gz-1).x = weight*dist2_00;
+        cost_z(gx,gy,gz-1).y = weight*dist2_01;
+        //cost_z(gx,gy,gz-1).z = weight*dist2_00; // border nodes can't move
     }
 
-    cost_x(x,y,z) = weight*o_x;
-    cost_y(x,y,z) = weight*o_y;
-    cost_z(x,y,z) = weight*o_z;
 }
 
 
 void gpu_compute_binary_cost(
     const stk::GpuVolume& df,
+    const int3& block_offset,
+    const int3& block_dims,
     const float3& delta,
     float weight,
     stk::GpuVolume& cost_x, // float4
@@ -297,6 +379,8 @@ void gpu_compute_binary_cost(
     regularizer_kernel<<<grid_size, block_size, 0, stream>>>(
         df,
         dims,
+        block_offset,
+        block_dims,
         delta,
         weight,
         cost_x,

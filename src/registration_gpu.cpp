@@ -72,36 +72,34 @@ bool do_block(
                     double f0 = unary_cost(gx, gy, gz).x;
                     double f1 = unary_cost(gx, gy, gz).y;
 
-                    printf("GPU: %d %d %d : %f %f\n", gx, gy, gz, f0, f1);
-
                     // Block borders (excl image borders) (T-weights with binary term for neighboring voxels)
 
-                    // if (sub_x == 0 && gx != 0) {
-                    //     f0 += binary_cost_x(gx-1,gy,gz).x;
-                    //     f1 += binary_cost_x(gx-1,gy,gz).y;
-                    // }
-                    // else if (sub_x == block_dims.x - 1 && gx < int(dims.x) - 1) {
-                    //     f0 += binary_cost_x(gx,gy,gz).x;
-                    //     f1 += binary_cost_x(gx,gy,gz).z;
-                    // }
+                    if (sub_x == 0 && gx != 0) {
+                        f0 += binary_cost_x(gx-1,gy,gz).x;
+                        f1 += binary_cost_x(gx-1,gy,gz).y;
+                    }
+                    else if (sub_x == block_dims.x - 1 && gx < int(dims.x) - 1) {
+                        f0 += binary_cost_x(gx,gy,gz).x;
+                        f1 += binary_cost_x(gx,gy,gz).z;
+                    }
 
-                    // if (sub_y == 0 && gy != 0) {
-                    //     f0 += binary_cost_y(gx,gy-1,gz).x;
-                    //     f1 += binary_cost_y(gx,gy-1,gz).y;
-                    // }
-                    // else if (sub_y == block_dims.y - 1 && gy < int(dims.y) - 1) {
-                    //     f0 += binary_cost_y(gx,gy,gz).x;
-                    //     f1 += binary_cost_y(gx,gy,gz).z;
-                    // }
+                    if (sub_y == 0 && gy != 0) {
+                        f0 += binary_cost_y(gx,gy-1,gz).x;
+                        f1 += binary_cost_y(gx,gy-1,gz).y;
+                    }
+                    else if (sub_y == block_dims.y - 1 && gy < int(dims.y) - 1) {
+                        f0 += binary_cost_y(gx,gy,gz).x;
+                        f1 += binary_cost_y(gx,gy,gz).z;
+                    }
 
-                    // if (sub_z == 0 && gz != 0) {
-                    //     f0 += binary_cost_z(gx,gy,gz-1).x;
-                    //     f1 += binary_cost_z(gx,gy,gz-1).y;
-                    // }
-                    // else if (sub_z == block_dims.z - 1 && gz < int(dims.z) - 1) {
-                    //     f0 += binary_cost_z(gx,gy,gz).x;
-                    //     f1 += binary_cost_z(gx,gy,gz).z;
-                    // }
+                    if (sub_z == 0 && gz != 0) {
+                        f0 += binary_cost_z(gx,gy,gz-1).x;
+                        f1 += binary_cost_z(gx,gy,gz-1).y;
+                    }
+                    else if (sub_z == block_dims.z - 1 && gz < int(dims.z) - 1) {
+                        f0 += binary_cost_z(gx,gy,gz).x;
+                        f1 += binary_cost_z(gx,gy,gz).z;
+                    }
 
                     graph.add_term1(sub_x, sub_y, sub_z, f0, f1);
 
@@ -131,18 +129,22 @@ bool do_block(
 
                     //     current_energy += f_same;
                     // }
-                    // if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
-                    //     double f_same = binary_cost_z(gx,gy,gz).x;
-                    //     double f01 = binary_cost_z(gx,gy,gz).y;
-                    //     double f10 = binary_cost_z(gx,gy,gz).z;
+                    if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
+                        double f_same = binary_cost_z(gx,gy,gz).x;
+                        double f01 = binary_cost_z(gx,gy,gz).y;
+                        double f10 = binary_cost_z(gx,gy,gz).z;
 
-                    //     graph.add_term2(
-                    //         sub_x, sub_y, sub_z,
-                    //         sub_x, sub_y, sub_z + 1, 
-                    //         f_same, f01, f10, f_same);
+                        printf("GPU %d %d %d : %f %f %f\n", gx, gy, gz, 
+                            f_same, f01, f10
+                        );
 
-                    //     current_energy += f_same;
-                    // }
+                        graph.add_term2(
+                            sub_x, sub_y, sub_z,
+                            sub_x, sub_y, sub_z + 1, 
+                            f_same, f01, f10, f_same);
+
+                        current_energy += f_same;
+                    }
                 }
             }
         }
@@ -270,8 +272,7 @@ void run_registration_gpu(
                         step_size.y * _neighbors[n].y,
                         step_size.z * _neighbors[n].z
                     };
-                    printf("delta %f %f %f\n", delta.x, delta.y, delta.z);
-    
+                    
                     for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
                         int block_x = block_idx % real_block_count.x;
                         int block_y = (block_idx / real_block_count.x) % real_block_count.y;
