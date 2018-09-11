@@ -145,12 +145,14 @@ __global__ void ncc_kernel(
     float denom0 = sqrt(sff*smm0);
     float denom1 = sqrt(sff*smm1);
 
+    float2 out = {0, 0};
     if(denom0 > 1e-14) {
-        cost_acc(x,y,z).x = 0.5f*(1.0f-float(sfm0 / denom0));
+        out.x = 0.5f*(1.0f-float(sfm0 / denom0));
     }
     if(denom1 > 1e-14) {
-        cost_acc(x,y,z).y = 0.5f*(1.0f-float(sfm1 / denom1));
+        out.y = 0.5f*(1.0f-float(sfm1 / denom1));
     }
+    cost_acc(x,y,z) = out;
 }
 
 void gpu_compute_unary_cost(
@@ -188,6 +190,7 @@ void gpu_compute_unary_cost(
         delta,
         unary_cost
     );
+    CUDA_CHECK_ERRORS(cudaPeekAtLastError());
 }
 
 __global__ void regularizer_kernel(
@@ -300,6 +303,7 @@ void gpu_compute_binary_cost(
         cost_y,
         cost_z
     );
+    CUDA_CHECK_ERRORS(cudaPeekAtLastError());
 }
 
 __global__ void apply_displacement_delta(
@@ -344,4 +348,5 @@ void gpu_apply_displacement_delta(
         dims, 
         float4{delta.x, delta.y, delta.z, 0.0f}
     );
+    CUDA_CHECK_ERRORS(cudaPeekAtLastError());
 }

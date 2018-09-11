@@ -35,76 +35,6 @@ stk::VolumeFloat3 df_float4_to_float3(const stk::VolumeFloat4& df, stk::VolumeFl
     return out;
 }
 
-// returns current energy
-double build_graph(
-    GraphCut<double>& graph, 
-    const stk::VolumeFloat2 unary_cost,
-    const stk::VolumeFloat4 binary_cost_x,
-    const stk::VolumeFloat4 binary_cost_y,
-    const stk::VolumeFloat4 binary_cost_z
-)
-{
-    dim3 dims = unary_cost.size();
-
-    double current_energy = 0;
-
-    for (int z = 0; z < (int)dims.z; ++z) {
-    for (int y = 0; y < (int)dims.y; ++y) {
-    for (int x = 0; x < (int)dims.x; ++x) {
-        double f0 = unary_cost(x,y,z).x;
-        double f1 = unary_cost(x,y,z).y;
-
-        graph.add_term1(x, y, z, f0, f1);
-
-        current_energy += f0;
-    // }
-    // }
-    // }
-    // for (int z = 0; z < (int)dims.z; ++z) {
-    // for (int y = 0; y < (int)dims.y; ++y) {
-    // for (int x = 0; x < (int)dims.x; ++x) {
-
-        if (x + 1 < int(dims.x)) {
-            double f_same = binary_cost_x(x,y,z).x;
-            double f01 = binary_cost_x(x,y,z).y;
-            double f10 = binary_cost_x(x,y,z).z;
-
-            graph.add_term2(
-                x, y, z,
-                x + 1, y, z, 
-                f_same, f01, f10, f_same);
-
-            current_energy += f_same;
-        }
-        if (y + 1 < int(dims.y)) {
-            double f_same = binary_cost_y(x,y,z).x;
-            double f01 = binary_cost_y(x,y,z).y;
-            double f10 = binary_cost_y(x,y,z).z;
-
-            graph.add_term2(
-                x, y, z,
-                x, y + 1, z,
-                f_same, f01, f10, f_same);
-
-            current_energy += f_same;
-        }
-        if (z + 1 < int(dims.z)) {
-            double f_same = binary_cost_z(x,y,z).x;
-            double f01 = binary_cost_z(x,y,z).y;
-            double f10 = binary_cost_z(x,y,z).z;
-
-            graph.add_term2(
-                x, y, z,
-                x, y, z + 1,
-                f_same, f01, f10, f_same);
-
-            current_energy += f_same;
-        }
-    }}}
-
-    return current_energy;
-}
-
 bool do_block(
     const stk::VolumeFloat2& unary_cost,
     const stk::VolumeFloat4& binary_cost_x,
@@ -142,75 +72,77 @@ bool do_block(
                     double f0 = unary_cost(gx, gy, gz).x;
                     double f1 = unary_cost(gx, gy, gz).y;
 
+                    printf("GPU: %d %d %d : %f %f\n", gx, gy, gz, f0, f1);
+
                     // Block borders (excl image borders) (T-weights with binary term for neighboring voxels)
 
-                    if (sub_x == 0 && gx != 0) {
-                        f0 += binary_cost_x(gx-1,gy,gz).x;
-                        f1 += binary_cost_x(gx-1,gy,gz).y;
-                    }
-                    else if (sub_x == block_dims.x - 1 && gx < int(dims.x) - 1) {
-                        f0 += binary_cost_x(gx,gy,gz).x;
-                        f1 += binary_cost_x(gx,gy,gz).z;
-                    }
+                    // if (sub_x == 0 && gx != 0) {
+                    //     f0 += binary_cost_x(gx-1,gy,gz).x;
+                    //     f1 += binary_cost_x(gx-1,gy,gz).y;
+                    // }
+                    // else if (sub_x == block_dims.x - 1 && gx < int(dims.x) - 1) {
+                    //     f0 += binary_cost_x(gx,gy,gz).x;
+                    //     f1 += binary_cost_x(gx,gy,gz).z;
+                    // }
 
-                    if (sub_y == 0 && gy != 0) {
-                        f0 += binary_cost_y(gx,gy-1,gz).x;
-                        f1 += binary_cost_y(gx,gy-1,gz).y;
-                    }
-                    else if (sub_y == block_dims.y - 1 && gy < int(dims.y) - 1) {
-                        f0 += binary_cost_y(gx,gy,gz).x;
-                        f1 += binary_cost_y(gx,gy,gz).z;
-                    }
+                    // if (sub_y == 0 && gy != 0) {
+                    //     f0 += binary_cost_y(gx,gy-1,gz).x;
+                    //     f1 += binary_cost_y(gx,gy-1,gz).y;
+                    // }
+                    // else if (sub_y == block_dims.y - 1 && gy < int(dims.y) - 1) {
+                    //     f0 += binary_cost_y(gx,gy,gz).x;
+                    //     f1 += binary_cost_y(gx,gy,gz).z;
+                    // }
 
-                    if (sub_z == 0 && gz != 0) {
-                        f0 += binary_cost_z(gx,gy,gz-1).x;
-                        f1 += binary_cost_z(gx,gy,gz-1).y;
-                    }
-                    else if (sub_z == block_dims.z - 1 && gz < int(dims.z) - 1) {
-                        f0 += binary_cost_z(gx,gy,gz).x;
-                        f1 += binary_cost_z(gx,gy,gz).z;
-                    }
+                    // if (sub_z == 0 && gz != 0) {
+                    //     f0 += binary_cost_z(gx,gy,gz-1).x;
+                    //     f1 += binary_cost_z(gx,gy,gz-1).y;
+                    // }
+                    // else if (sub_z == block_dims.z - 1 && gz < int(dims.z) - 1) {
+                    //     f0 += binary_cost_z(gx,gy,gz).x;
+                    //     f1 += binary_cost_z(gx,gy,gz).z;
+                    // }
 
                     graph.add_term1(sub_x, sub_y, sub_z, f0, f1);
 
                     current_energy += f0;
 
-                    if (sub_x + 1 < block_dims.x && gx + 1 < int(dims.x)) {
-                        double f_same = binary_cost_x(gx,gy,gz).x;
-                        double f01 = binary_cost_x(gx,gy,gz).y;
-                        double f10 = binary_cost_x(gx,gy,gz).z;
+                    // if (sub_x + 1 < block_dims.x && gx + 1 < int(dims.x)) {
+                    //     double f_same = binary_cost_x(gx,gy,gz).x;
+                    //     double f01 = binary_cost_x(gx,gy,gz).y;
+                    //     double f10 = binary_cost_x(gx,gy,gz).z;
 
-                        graph.add_term2(
-                            sub_x, sub_y, sub_z,
-                            sub_x + 1, sub_y, sub_z, 
-                            f_same, f01, f10, f_same);
+                    //     graph.add_term2(
+                    //         sub_x, sub_y, sub_z,
+                    //         sub_x + 1, sub_y, sub_z, 
+                    //         f_same, f01, f10, f_same);
 
-                        current_energy += f_same;
-                    }
-                    if (sub_y + 1 < block_dims.y && gy + 1 < int(dims.y)) {
-                        double f_same = binary_cost_y(gx,gy,gz).x;
-                        double f01 = binary_cost_y(gx,gy,gz).y;
-                        double f10 = binary_cost_y(gx,gy,gz).z;
+                    //     current_energy += f_same;
+                    // }
+                    // if (sub_y + 1 < block_dims.y && gy + 1 < int(dims.y)) {
+                    //     double f_same = binary_cost_y(gx,gy,gz).x;
+                    //     double f01 = binary_cost_y(gx,gy,gz).y;
+                    //     double f10 = binary_cost_y(gx,gy,gz).z;
 
-                        graph.add_term2(
-                            sub_x, sub_y, sub_z,
-                            sub_x, sub_y + 1, sub_z, 
-                            f_same, f01, f10, f_same);
+                    //     graph.add_term2(
+                    //         sub_x, sub_y, sub_z,
+                    //         sub_x, sub_y + 1, sub_z, 
+                    //         f_same, f01, f10, f_same);
 
-                        current_energy += f_same;
-                    }
-                    if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
-                        double f_same = binary_cost_z(gx,gy,gz).x;
-                        double f01 = binary_cost_z(gx,gy,gz).y;
-                        double f10 = binary_cost_z(gx,gy,gz).z;
+                    //     current_energy += f_same;
+                    // }
+                    // if (sub_z + 1 < block_dims.z && gz + 1 < int(dims.z)) {
+                    //     double f_same = binary_cost_z(gx,gy,gz).x;
+                    //     double f01 = binary_cost_z(gx,gy,gz).y;
+                    //     double f10 = binary_cost_z(gx,gy,gz).z;
 
-                        graph.add_term2(
-                            sub_x, sub_y, sub_z,
-                            sub_x, sub_y, sub_z + 1, 
-                            f_same, f01, f10, f_same);
+                    //     graph.add_term2(
+                    //         sub_x, sub_y, sub_z,
+                    //         sub_x, sub_y, sub_z + 1, 
+                    //         f_same, f01, f10, f_same);
 
-                        current_energy += f_same;
-                    }
+                    //     current_energy += f_same;
+                    // }
                 }
             }
         }
@@ -338,9 +270,9 @@ void run_registration_gpu(
                         step_size.y * _neighbors[n].y,
                         step_size.z * _neighbors[n].z
                     };
+                    printf("delta %f %f %f\n", delta.x, delta.y, delta.z);
     
                     for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
-                        PROFILER_SCOPE("block", 0xFFAA623D);
                         int block_x = block_idx % real_block_count.x;
                         int block_y = (block_idx / real_block_count.x) % real_block_count.y;
                         int block_z = block_idx / (real_block_count.x*real_block_count.y);
@@ -357,8 +289,11 @@ void run_registration_gpu(
                         pipeline.enqueue_block({block_p, block_dims, block_offset});
                     }
                     pipeline.dispatch(delta);
+                    break;
                 }
+                    break;
             }
+                    break;
         }
 
         done = num_blocks_changed == 0;
