@@ -1,13 +1,18 @@
 #pragma once
 
+#include "profiler/profiler.h"
 #include "registration.h"
 
+#include <stk/cuda/cuda.h>
 #include <stk/cuda/stream.h>
 #include <stk/image/gpu_volume.h>
 #include <stk/image/volume.h>
 #include <stk/math/types.h>
 
+#include <atomic>
 #include <deque>
+#include <mutex>
+#include <thread>
 
 void gpu_compute_unary_cost(
     const stk::GpuVolume& fixed,
@@ -50,6 +55,8 @@ bool do_block(
     stk::VolumeUChar& labels
 );
 
+void stream_callback(cudaStream_t , cudaError_t , void* user_data);
+void worker_thread(class GpuPipeline* pipeline);
 
 class GpuPipeline
 {
@@ -86,9 +93,19 @@ public:
 
         _labels = stk::Volume(dims, stk::Type_UChar, nullptr, stk::Usage_Pinned);
         _gpu_labels = _labels;
+
+        _stop = false;
+        for (int i = 0; i < 8; ++i) {
+            _threads[i] = std::thread(worker_thread, this);
+        }
+
     }
     ~GpuPipeline()
     {
+        _stop = true;
+        for (int i = 0; i < 8; ++i) {
+            _threads[i].join();
+        }
     }
 
     void enqueue_block(const Block& block)
@@ -143,118 +160,141 @@ public:
 
     }
 
+    void download_subvolume(
+        const stk::GpuVolume& src, 
+        stk::Volume& tgt, 
+        const int3& offset,
+        const int3& dims,
+        bool pad, // Pad all axes by 1 in negative direction for binary cost
+        stk::cuda::Stream& stream)
+    {
+        int3 padded_offset = offset;
+        int3 padded_dims = dims;
+
+        if (pad) {
+            if (offset.x > 0) {
+                padded_offset.x -= 1;
+                padded_dims.x += 1;
+            }
+            if (offset.y > 0) {
+                padded_offset.y -= 1;
+                padded_dims.y += 1;
+            }
+            if (offset.z > 0) {
+                padded_offset.z -= 1;
+                padded_dims.z += 1;
+            }
+        }
+
+        stk::GpuVolume sub_src(src,
+            { padded_offset.x, padded_offset.x + padded_dims.x },
+            { padded_offset.y, padded_offset.y + padded_dims.y },
+            { padded_offset.z, padded_offset.z + padded_dims.z }
+        );
+
+        stk::Volume sub_tgt(tgt,
+            { padded_offset.x, padded_offset.x + padded_dims.x },
+            { padded_offset.y, padded_offset.y + padded_dims.y },
+            { padded_offset.z, padded_offset.z + padded_dims.z }
+        );
+
+        sub_src.download(sub_tgt, stream);
+    }
+
     void dispatch(const float3& delta)
     {
+        _blocks_remaining = _gpu_queue.size();
+
         _labels.fill(0);
         
-        while(!_gpu_queue.empty()) {
-            Block block = _gpu_queue.front();
-            _gpu_queue.pop_front();
+        int si = 0;
+        {
+            PROFILER_SCOPE("gpucost", 0xFF492343);
+            while(!_gpu_queue.empty()) {
+                Block block = _gpu_queue.front();
+                _gpu_queue.pop_front();
 
-            int gx = block.p.x * block.dims.x - block.offset.x;
-            int gy = block.p.y * block.dims.y - block.offset.y;
-            int gz = block.p.z * block.dims.z - block.offset.z;
+                int gx = block.p.x * block.dims.x - block.offset.x;
+                int gy = block.p.y * block.dims.y - block.offset.y;
+                int gz = block.p.z * block.dims.z - block.offset.z;
 
+                _streams[si].stream.synchronize();
 
-            gpu_compute_unary_cost(
-                _fixed,
-                _moving,
-                _df,
-                int3{gx, gy, gz},
-                block.dims,
-                delta,
-                _gpu_unary_cost,
-                _streams[0]
-            );
-            
-            // stk::VolumeFloat2 sub_unary(_unary_cost,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
-            // sub_unary_gpu.download(sub_unary, _streams[0]);
-            _gpu_unary_cost.download(_unary_cost, _streams[0]);
-            // stk::GpuVolume sub_unary_gpu(_gpu_unary_cost,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
+                gpu_compute_unary_cost(
+                    _fixed,
+                    _moving,
+                    _df,
+                    {gx, gy, gz},
+                    block.dims,
+                    delta,
+                    _gpu_unary_cost,
+                    _streams[si].stream
+                );
+                
+                download_subvolume(
+                    _gpu_unary_cost, 
+                    _unary_cost,
+                    {gx,gy,gz},
+                    block.dims,
+                    false,
+                    _streams[si].stream
+                );
 
-            // stk::GpuVolume sub_binary_x_gpu(_gpu_binary_cost_x,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
-            // stk::GpuVolume sub_binary_y_gpu(_gpu_binary_cost_y,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
+                gpu_compute_binary_cost(
+                    _df,
+                    {gx, gy, gz},
+                    block.dims,
+                    delta,
+                    _regularization_weight,
+                    _gpu_binary_cost_x,
+                    _gpu_binary_cost_y,
+                    _gpu_binary_cost_z,
+                    _streams[si].stream
+                );
+                
+                download_subvolume(
+                    _gpu_binary_cost_x, 
+                    _binary_cost_x,
+                    {gx,gy,gz},
+                    block.dims,
+                    true,
+                    _streams[si].stream
+                );
+                download_subvolume(
+                    _gpu_binary_cost_y, 
+                    _binary_cost_y,
+                    {gx,gy,gz},
+                    block.dims,
+                    true,
+                    _streams[si].stream
+                );
+                download_subvolume(
+                    _gpu_binary_cost_z, 
+                    _binary_cost_z,
+                    int3{gx,gy,gz},
+                    block.dims,
+                    true,
+                    _streams[si].stream
+                );
 
-            // stk::GpuVolume sub_binary_z_gpu(_gpu_binary_cost_z,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
+                _streams[si].pipe = this;
+                _streams[si].block = block;
+                _streams[si].stream.add_callback(stream_callback, &_streams[si]);
 
-            gpu_compute_binary_cost(
-                _df,
-                int3{gx, gy, gz},
-                block.dims,
-                delta,
-                _regularization_weight,
-                _gpu_binary_cost_x,
-                _gpu_binary_cost_y,
-                _gpu_binary_cost_z,
-                _streams[0]
-            );
-            
-            _gpu_binary_cost_x.download(_binary_cost_x, _streams[0]);
-            _gpu_binary_cost_y.download(_binary_cost_y, _streams[0]);
-            _gpu_binary_cost_z.download(_binary_cost_z, _streams[0]);
-
-            // stk::VolumeFloat4 sub_binary_x(_binary_cost_x,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
-            // sub_binary_x_gpu.download(sub_binary_x, _streams[0]);
-
-            // stk::VolumeFloat4 sub_binary_y(_binary_cost_y,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
-            // sub_binary_y_gpu.download(sub_binary_y, _streams[0]);
-            
-            // stk::VolumeFloat4 sub_binary_z(_binary_cost_z,
-            //     { gx, gx + block.dims.x },
-            //     { gy, gy + block.dims.y },
-            //     { gz, gz + block.dims.z }
-            // );
-            // sub_binary_z_gpu.download(sub_binary_z, _streams[0]);
-
-            _streams[0].synchronize();
-
-            _cpu_queue.push_back(block);
+                si = (si + 1) % 4;
+            }
+            for (si = 0; si < 4; ++si)
+                _streams[si].stream.synchronize();
         }
 
-        while(!_cpu_queue.empty()) {
-            Block block = _cpu_queue.front();
-            _cpu_queue.pop_front();
-
-            do_block(
-                _unary_cost,
-                _binary_cost_x,
-                _binary_cost_y,
-                _binary_cost_z,
-                block.p,
-                block.dims,
-                block.offset,
-                _labels
-            );
+        while (_blocks_remaining > 0) {
+            std::this_thread::yield();
         }
-        
+
+        // for (int i = 0; i < 8; ++i) {
+        //     _threads[i].join();
+        // }
+
         _gpu_labels.upload(_labels);
 
         gpu_apply_displacement_delta(_df, _gpu_labels, delta, stk::cuda::Stream::null());
@@ -278,8 +318,62 @@ public:
     stk::VolumeUChar _labels;
     stk::GpuVolume _gpu_labels;
 
-    stk::cuda::Stream _streams[4];
+    struct Stream {
+        class GpuPipeline* pipe;
+        stk::cuda::Stream stream;
+
+        Block block;
+
+        Stream() : pipe(nullptr) {}
+    };
+    Stream _streams[4];
+
+    std::thread _threads[8];
 
     std::deque<Block> _gpu_queue;
+    std::atomic<uint32_t> _blocks_remaining;
+    std::atomic<bool> _stop;
+
+    std::mutex _queue_lock;
     std::deque<Block> _cpu_queue;
+
 };
+
+void stream_callback(cudaStream_t , cudaError_t , void* user_data)
+{
+    GpuPipeline::Stream* stream = static_cast<GpuPipeline::Stream*>(user_data);
+    stream->pipe->_queue_lock.lock();
+    stream->pipe->_cpu_queue.push_back(stream->block);
+    stream->pipe->_queue_lock.unlock();
+}
+void worker_thread(class GpuPipeline* pipeline)
+{
+    while (!pipeline->_stop) {
+        GpuPipeline::Block b{0};
+        b.dims = {-1,-1,-1};
+
+        pipeline->_queue_lock.lock();
+        if (!pipeline->_cpu_queue.empty()) {
+            b = pipeline->_cpu_queue.front();
+            pipeline->_cpu_queue.pop_front();
+        }
+        pipeline->_queue_lock.unlock();
+
+        if (b.dims.x != -1) {
+            do_block(
+                pipeline->_unary_cost,
+                pipeline->_binary_cost_x,
+                pipeline->_binary_cost_y,
+                pipeline->_binary_cost_z,
+                b.p,
+                b.dims,
+                b.offset,
+                pipeline->_labels
+            );
+            --pipeline->_blocks_remaining;
+        }
+        else {
+            std::this_thread::yield();
+        }
+    }
+}

@@ -66,7 +66,7 @@ int main(int argc, char* argv[])
 
     PROFILER_INIT();
     
-    dim3 dims { 128, 64, 64 };
+    dim3 dims { 256, 256, 512 };
 
     stk::VolumeFloat fixed = make_volume(dims);
     stk::VolumeFloat moving = make_volume(dims);

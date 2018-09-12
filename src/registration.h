@@ -5,7 +5,7 @@
 
 inline const int _max_iteration_count = 1;
 inline const float _regularization_weight = 0.1f;
-inline const int3 _block_size {16,16,16};
+inline const int3 _block_size {16,16,16}; // TODO: Crashes for non pow2 sizes
 inline const int3 _neighbors[] = {
     {1, 0, 0},
     {-1, 0, 0},

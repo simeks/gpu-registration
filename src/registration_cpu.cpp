@@ -443,7 +443,7 @@ void run_registration_cpu(
                         step_size.z * _neighbors[n].z
                     };
                         
-                    //#pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
+                    #pragma omp parallel for schedule(dynamic) reduction(+:num_blocks_changed)
                     for (int block_idx = 0; block_idx < num_blocks; ++block_idx) {
                         PROFILER_SCOPE("block", 0xFFAA623D);
                         int block_x = block_idx % real_block_count.x;
