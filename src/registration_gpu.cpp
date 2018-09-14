@@ -236,7 +236,7 @@ void run_registration_gpu(
         
         size_t num_blocks_changed = 0;
 
-        for (int use_shift = 0; use_shift < 1; ++use_shift) {
+        for (int use_shift = 0; use_shift < 2; ++use_shift) {
             PROFILER_SCOPE("shift", 0xFF766952);
             if (use_shift == 1 && (block_count.x * block_count.y * block_count.z) <= 1)
                 continue;

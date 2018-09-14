@@ -168,6 +168,8 @@ public:
         bool pad, // Pad all axes by 1 in negative direction for binary cost
         stk::cuda::Stream& stream)
     {
+        ASSERT(src.size() == tgt.size());
+
         int3 padded_offset = offset;
         int3 padded_dims = dims;
 
@@ -185,6 +187,15 @@ public:
                 padded_dims.z += 1;
             }
         }
+
+        dim3 src_size = src.size();
+        padded_offset.x = std::max<int>(0, std::min<int>(padded_offset.x, src_size.x));
+        padded_offset.y = std::max<int>(0, std::min<int>(padded_offset.y, src_size.y));
+        padded_offset.z = std::max<int>(0, std::min<int>(padded_offset.z, src_size.z));
+
+        padded_dims.x = std::max<int>(0, std::min<int>(padded_dims.x, src_size.x - padded_offset.x));
+        padded_dims.y = std::max<int>(0, std::min<int>(padded_dims.y, src_size.y - padded_offset.y));
+        padded_dims.z = std::max<int>(0, std::min<int>(padded_dims.z, src_size.z - padded_offset.z));
 
         stk::GpuVolume sub_src(src,
             { padded_offset.x, padded_offset.x + padded_dims.x },
